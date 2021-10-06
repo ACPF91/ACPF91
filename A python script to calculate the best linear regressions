@@ -1,0 +1,344 @@
+#IMPORT NECESSARY LIBRARIES
+import math
+import pandas as pd
+import statsmodels.api as sm
+import numpy as np
+from itertools import combinations
+import os
+import scipy
+from scipy import stats
+import statsmodels.stats.diagnostic as sm_diagnostic
+import statsmodels.stats.stattools as sm_tools
+pd.options.mode.chained_assignment = None
+from datetime import datetime
+##############################################################################################################
+#                        SET                                                                         
+#                      INPUTS    
+##############################################################################################################  
+#SET DATA PATHS
+DATASET=pd.read_csv(r'C:/Users/acpf/OneDrive/UTAD/A_FZR/ARTIGOS/ARTIGO_REGRESSOES/code_example/input_files/1_Dataset_for_models/Electrical_conductivity.csv',delimiter=";").set_index("Sampling_site")
+signs_table=pd.read_csv(r'C:/Users/acpf/OneDrive/UTAD/A_FZR/ARTIGOS/ARTIGO_REGRESSOES/code_example/input_files/2_signs/Variables_with_signs.csv',delimiter=";").set_index("variable")
+Data_for_predictions=pd.read_csv(r'C:/Users/acpf/OneDrive/UTAD/A_FZR/ARTIGOS/ARTIGO_REGRESSOES/code_example/input_files/3_locations_to_predict/Predictions_input.csv',delimiter=";").set_index("Sampling_site")
+#OUTPUT
+output_table_path=r"C:\Users\acpf\OneDrive\UTAD\A_FZR\ARTIGOS\ARTIGO_REGRESSOES\code_example\output_files\Electrical_conductivity.xlsx"                                       
+#RESPONSE VARIABLE Y
+Chosen_Y="Electrical_conductivity"
+#MINIMUM NUMBER OF REGRESSORS
+nor_min=1
+#MAXIMUM NUMBER OF REGRESSORS
+nor_max=6
+#IF INTERCEPT =0 SET FALSE, ELSE SET AS TRUE
+intercept_value=True;
+#                    STATISTICAL THRESHOLDS
+#MAXIMUM VARIANCE INFLATION FACTOR, AUTHORS RECOMMEND TO USE FROM 5 TO 10
+MAXIMUM_VIF=5
+#STATISTCAL SIGNIFICANCE, PROBABILITY TO ACCEPT THE NULL HYPOTHESIS FOR STATISTICAL TESTS, 0.05 MEANS 5% OF PROBABILITY TO ACCEPT THE NULL HYPOTHESIS
+#FOR R_SQUARED
+max_p_r_sq=0.05
+#FOR REGRESSION COEFFICIENTS
+max_p_reg_coef=0.05
+#FOR HETEROSKEDASTICITY TESTS
+min_p_for_Heteroskedasticity=0.05
+#FOR ERROR NORMALITY TESTS
+min_p_for_error_normality=0.05
+# SET THE SAMPLES FOR THE GOLDFELD QUANDT TESTS, IN THIS TEST ARE CREATED TWO AUXILIARY REGRESSIONS, 
+#A AND B ARE THE REGRESSIONS, THE LOWER AND UPPER LIMIT ARE THE SAMPLES IDENTIFICATION TO USE IN THE AUXILIARY REGRESSIONS, 
+#IT IS RECOMMENDED TO USE 1/3 FOR THE FIRST REGRESSION, 2/3 OF THE DATA NOT USED AND THE LAST PART OF THE DATA FOR THE SECOND AUXILIARY REGRESSION
+lower_limit_A_GQ=1
+upper_limit_A_GQ=9
+lower_limit_B_GQ=21
+upper_limit_B_GQ=29
+################################################################################################
+########  INPUTS ARE SELECTED ABOVE,THE FOLLOWING CODE LINES ARE JUST FOR CALCULATIONS######
+################################################################################################
+#CALCULATE THE START TIME
+start_time=datetime.now()
+
+#SORT THE DATASET DATAFRAME BY THE CHOSEN PREDICTED VARIABLE
+DATASET=DATASET.sort_values(by=Chosen_Y)
+
+#CREATE A DATAFRAME  THAT ONLY CONTAINS THE PREDICTED VARIABLE
+YY=DATASET[Chosen_Y]
+
+#CREATE A DATAFRAME  THAT CONTAINS ALL REGRESSORS
+all_XX=DATASET.drop(columns=[Chosen_Y])
+
+#CALCULATE THE NUMBER OF VARIABLES THAT CAN BE USED AS REGRESSORS
+
+total_number_of_xs=len(all_XX.columns)
+#CALCULATE THE TOTAL NUMBER OF COMBINATIONS, REGARDING THE NUMBER OF POSSIBLE REGRESSORS, AND THE SELECTED MAXIMUM AND MINIMUM NUMBER OF REGRESSORS
+total_number_of_combinations=0
+for i_lets_calculate_the_total_number_of_combinations in range(nor_min,nor_max+1):
+    total_number_of_combinations +=math.factorial(total_number_of_xs)/(math.factorial(i_lets_calculate_the_total_number_of_combinations)*math.factorial(total_number_of_xs-i_lets_calculate_the_total_number_of_combinations))
+# CREATE A LIST WITH THE POSSIBLE REGRESSORS/ COMBINATIONS OF VARIABLES
+list_of_XX=[]
+for xn in all_XX: list_of_XX.append(xn)
+#CREATE A DATAFRAME FOR PREDICTIONS, FIRST FOR THE SAMPLES USED IN THE REGRESSION. CREATE A SECOND DATAFRAME TO CALCULATE PREDICTIONS FOR THE SAMPLES IN “Data_for_predictions” 
+Predicted_values=DATASET
+Predicted_values_2=Data_for_predictions
+for i in list_of_XX:
+    Predicted_values=Predicted_values.drop(columns=[i])
+for j in Predicted_values_2:
+    Predicted_values_2=Predicted_values_2.drop(columns=[j])
+#CREATE OUTPUTS DATAFRAME
+RESULTS_DF = pd.DataFrame(columns=list_of_XX)
+
+#CREATE OUTPUT ROWS FOR OUTPUT EXCEL
+RESULTS_DF.insert(0,'number_of_regressors',0)
+RESULTS_DF.insert(1,'1_vif',0)
+RESULTS_DF.insert(2,'2_r_sq',0)
+RESULTS_DF.insert(3,'2_r_sq_adj',0)
+RESULTS_DF.insert(4,'2_p_value_of_R_squared',0)
+RESULTS_DF.insert(5,'3_p_regression_coef',0)
+RESULTS_DF.insert(6,'4_MINIMUM_P_VALUE',1)
+RESULTS_DF.insert(7,'5_MINIMUM_P_VALUE',1)
+RESULTS_DF.insert(8,'6_sign_test',0)
+RESULTS_DF.insert(9,'4_Jarque-Bera',1)
+RESULTS_DF.insert(10,'4_Anderson-Darling',1)
+RESULTS_DF.insert(11,'4_Shapiro-Wilk',1)
+RESULTS_DF.insert(12,'4_Kolmogorov-Smirnov',1)
+RESULTS_DF.insert(13,'4_Omnibus',1)
+RESULTS_DF.insert(14,'5_Breusch–Pagan_chi_sq',1)
+RESULTS_DF.insert(15,'5_Breusch–Pagan_f',1)
+RESULTS_DF.insert(16,'5_Harvey_chi_sq',1)
+RESULTS_DF.insert(17,'5_Harvey_f',1)
+RESULTS_DF.insert(18,'5_Glejser_chi_sq',1)
+RESULTS_DF.insert(19,'5_Glejser_f',1)
+RESULTS_DF.insert(20,'5_Goldfeld-Quandt',1)
+RESULTS_DF.insert(21,'intercept',0)
+
+# THE COMBINATION NUMBER WORk AS IDENTIFICATION OF THE COMBINATION OF REGRESSORS FOR THE RESULTING LINEAR REGRESSION
+combination_number =0
+#START A CYCLE WITH THE NUMBER OF REGRESSORS, STARTING WITH THE MINIMUM TO THE MAXIMUM
+for number_of_regressors in range(nor_min,nor_max+1):
+    #CREATE A DATAFRAME CONTAINING ALL THE POSSIBLE COMBINATIONS OF REGRESSORS WITHOUT REPETITIONS FOR THE RESPECTIVE NUMBER OF REGRESSORS
+    combo_df=pd.DataFrame(combinations(list_of_XX, number_of_regressors))
+    number_of_rows=combo_df[0].count()
+    number_of_columns=len(combo_df.columns)
+
+    for row in range(0,number_of_rows):
+        combination_number += 1
+        # PRINT THE ALGORITHM RUNNINGS STATUS, PERCENTAGE OF REGRESSIONS THAT WERE CALCULATED
+        print(str(round(combination_number/total_number_of_combinations*100,2))+"%")
+        #APPEND A LINE IN THE RESULTS_DF
+        new_row_in_results_df=pd.Series(0, index=list_of_XX)
+        new_row_in_results_df.name=combination_number
+        RESULTS_DF=RESULTS_DF.append(new_row_in_results_df)
+        regressor_list=[]
+        for column in  range(0,number_of_columns):RESULTS_DF[combo_df[column][row]][combination_number]=1  
+        
+        for X_variable in list_of_XX:
+            if RESULTS_DF[X_variable][combination_number]==1:
+                regressor_list.append(X_variable)
+
+        #CREATE A DATAFRAME WITH THE SELECTED REGRESSORS        
+        XX=DATASET[regressor_list]
+        RESULTS_DF['number_of_regressors'][combination_number]=number_of_regressors
+        #START VIF CALCULATIONS
+        #CALCULATE THE CORRELATION MATRIX
+        correl_matrix=XX.corr()
+        try:
+            #IF THE MATRIX HAS AN INVERSE, THE VIFS CAN BE CALCULATED AND ARE CALCULATED FOR EACH REGRESSOR
+            
+            vif_matrix= np.linalg.inv(correl_matrix)
+            all_vifs=[]
+            for i in range(max(np.shape(vif_matrix))):
+                all_vifs.append(vif_matrix[i][i])
+            max_vif=max(all_vifs)
+            RESULTS_DF['1_vif'][combination_number]=max_vif
+        except:
+            #IF THE MATRIX HAS NO INVERSE, IT MEANS THAT AT LEAST TWO REGRESSORS ARE LINEARLY DEPENDENT, IN THIS CASE, ONE OF THE VIFS IS EXTREMELY HIGH, BY DEFAULT IT IS GIVEN THE VALUE OF  999999
+            RESULTS_DF['1_vif'][combination_number]=999999
+            max_vif=999999
+        if max_vif>MAXIMUM_VIF:
+            #IF THE MAX VIF OF REGRESSORS IS HIGHER THAN THE SELECTED MAXIMUM VIF, THE COMBINATION OF VARIABLES IS REMOVED FROM THE SUMMARY AND THEN IS CALCULATED THE NEXT COMBINATION OF REGRESSORS
+            RESULTS_DF=RESULTS_DF.drop(combination_number)
+        else:
+            #IF THE MAXIMUM VIFS ARE WITHIN THE STATISTICAL THRESHOLD, THE REGRESSION IS CALCULATED
+            #IF INTERCEPT VALUE IS TRUE IS CALCULATED THE REGRESSION WITH INTERCEPT DIFFERENT THAN 0
+
+            if intercept_value==True:
+                regression = sm.OLS(YY,XX.assign(intercept=1)).fit()
+            else:
+                #IF INTERCEPT VALUE IS FALSE, IS CALCULATED THE REGRESSION WITH INTERCEPT EQUAL TO 0
+                if intercept_value==False:
+                    regression = sm.OLS(YY,XX).fit()
+                else:
+                    print("please choose True or False for Intercept")
+            #CALCULATION OF THE STATISTICAL SIGNFICANCE OF R^2, R^2 AND ADJUSTED R^2
+            
+            statiscal_significance_of_r_squared=regression.f_pvalue
+            RESULTS_DF['2_p_value_of_R_squared'][combination_number]=statiscal_significance_of_r_squared
+            RESULTS_DF['2_r_sq'][combination_number]=regression.rsquared
+            RESULTS_DF['2_r_sq_adj'][combination_number]=regression.rsquared_adj
+            if max_p_r_sq<statiscal_significance_of_r_squared:
+                #IF THE STATISTICAL THRESHOLDS ARE NOT MET, THE ALGORITHM REMOVES THIS REGRESSION SUMMARY AND GOES FOR THE NEXT ONE
+                RESULTS_DF=RESULTS_DF.drop(combination_number)
+                
+            else:
+                #IF P-VALUE OF R^2 IS WITHIN THE STATISTICAL THRESHOLD, P VALUES OF REGRESSION COEFFICIENTS ARE CALCULATED
+                
+                max_p_val=max(regression.pvalues)
+                RESULTS_DF['3_p_regression_coef'][combination_number]=max_p_val
+                
+                if max_p_val>max_p_reg_coef:
+                    #IF THE STATISTICAL THRESHOLDS ARE NOT MET, THE ALGORITHM REMOVES THIS REGRESSION SUMMARY AND GOES FOR THE NEXT ONE
+                    RESULTS_DF=RESULTS_DF.drop(combination_number)
+            
+                else:
+                    #CALCULATE THE REGRESSION COEFFICIENTS
+                    if intercept_value==True:
+                        RESULTS_DF['intercept'][combination_number]=regression.params[int(regression.df_model)]
+                    else:
+                        RESULTS_DF['intercept'][combination_number]=0
+                    extract_parameter=-1
+                    for regression_parameter in XX:
+                        extract_parameter +=1
+                        RESULTS_DF[regression_parameter][combination_number]=regression.params[extract_parameter]
+                    #CALCULATE ERROR NORMALITY TESTS
+                    #4.1 Jarque-Bera 
+                    statistical_signficance_JB_test=sm_tools.jarque_bera(regression.resid)[1]
+                    RESULTS_DF['4_Jarque-Bera'][combination_number]=statistical_signficance_JB_test
+                    #4.2 Anderson-Darling Test
+                    statistical_signficance_Anderson_darling=sm_diagnostic.normal_ad(x = regression.resid)[1]
+                    RESULTS_DF['4_Anderson-Darling'][combination_number]=statistical_signficance_Anderson_darling
+                    #4.3 Shapiro-Wilk Test 
+                    statistical_signficance_Shapiro_Wilk=stats.shapiro(x = regression.resid)[1] 
+                    RESULTS_DF['4_Shapiro-Wilk'][combination_number]=statistical_signficance_Shapiro_Wilk
+                    #4.4 Kolmogorov-Smirnov Test
+                    statistical_signficance_Kolmogorov_Smirnov=sm_diagnostic.kstest_normal(x = regression.resid, dist = "norm")[1]
+                    RESULTS_DF['4_Kolmogorov-Smirnov'][combination_number]=statistical_signficance_Kolmogorov_Smirnov
+                    #4.5 omnibus 
+                    statistical_signficance_omnibus=sm_tools.omni_normtest(regression.resid)[1]
+                    RESULTS_DF['4_Omnibus'][combination_number]=statistical_signficance_omnibus
+                    list_of_error_normality_results=[statistical_signficance_Kolmogorov_Smirnov,statistical_signficance_Shapiro_Wilk,statistical_signficance_Anderson_darling,statistical_signficance_JB_test,statistical_signficance_omnibus]
+                    maximum_CALCULATED_p_in_error_normality=(max(list_of_error_normality_results))
+                    RESULTS_DF['4_MINIMUM_P_VALUE'][combination_number]=min(list_of_error_normality_results)
+                    
+                    
+                    if maximum_CALCULATED_p_in_error_normality<min_p_for_error_normality:
+                        #IF THE STATISTICAL THRESHOLDS ARE NOT MET, THE ALGORITHM REMOVES THIS REGRESSION SUMMARY AND GOES FOR THE NEXT ONE
+                        RESULTS_DF=RESULTS_DF.drop(combination_number)
+                        
+                    else:
+                        #heteroskedasticity  Tests
+                        #5.1 BREUCHP PAGAN TEST
+                        hetero_het_breuchpagan=sm_diagnostic.het_breuschpagan(resid = regression.resid, exog_het = sm.add_constant(XX))
+                        hetero_breuch_pagan_chi_sq_p_value=hetero_het_breuchpagan[1]
+                        hetero_breuch_pagan_f_test_p_value=hetero_het_breuchpagan[3]
+                        #5.2 harvey 
+                        harvey_YY=np.log(regression.resid**2)
+                        harvey_regression= sm.OLS(harvey_YY,XX.assign(intercept=1)).fit()
+                        HARVEY_R_SQUARED=harvey_regression.rsquared
+                        HARVEY_DF_RESIDUALS=harvey_regression.df_resid
+                        HARVEY_DF_REGRESSION=harvey_regression.df_model
+                        HARVEY_NUMBER_OF_SAMPLES=HARVEY_DF_RESIDUALS+HARVEY_DF_REGRESSION+1
+                        HARVEY_F_STATISTICS=HARVEY_R_SQUARED/(1-HARVEY_R_SQUARED)*HARVEY_DF_RESIDUALS/HARVEY_DF_REGRESSION
+                        HARVEY_Ch_sq_stat=HARVEY_NUMBER_OF_SAMPLES*HARVEY_R_SQUARED
+                        HARVEY_F_STATISTICS_p_VALUE=scipy.stats.f.sf(HARVEY_F_STATISTICS, HARVEY_DF_REGRESSION, HARVEY_DF_RESIDUALS)
+                        HARVEY_Ch_sq_stat_p_value=scipy.stats.chi2.sf(HARVEY_Ch_sq_stat,HARVEY_DF_REGRESSION)
+                    
+                        #5.3 harvey 
+                        GLEJSER_YY=abs(regression.resid)
+                        GLEJSER_regression= sm.OLS(GLEJSER_YY,XX.assign(intercept=1)).fit()
+                        GLEJSER_R_SQUARED=GLEJSER_regression.rsquared
+                        GLEJSER_DF_RESIDUALS=GLEJSER_regression.df_resid
+                        GLEJSER_DF_REGRESSION=GLEJSER_regression.df_model
+                        GLEJSER_NUMBER_OF_SAMPLES=GLEJSER_DF_RESIDUALS+GLEJSER_DF_REGRESSION+1
+                        GLEJSER_F_STATISTICS=GLEJSER_R_SQUARED/(1-GLEJSER_R_SQUARED)*GLEJSER_DF_RESIDUALS/GLEJSER_DF_REGRESSION
+                        GLEJSER_Ch_sq_stat=GLEJSER_NUMBER_OF_SAMPLES*GLEJSER_R_SQUARED
+                        #5.4 gleiser
+                        GLEJSER_F_STATISTICS_p_VALUE=scipy.stats.f.sf(GLEJSER_F_STATISTICS, GLEJSER_DF_REGRESSION, GLEJSER_DF_RESIDUALS)
+                        GLEJSER_Ch_sq_stat_p_value=scipy.stats.chi2.sf(GLEJSER_Ch_sq_stat,GLEJSER_DF_REGRESSION)
+
+                        #5.5 Goldfeld-Quandt
+                        list_of_F_statistic_goldfeld_quandt_p_value=[]
+                        for GFQ_ORDERED_X in XX:
+                            sorted_dataset=DATASET.sort_values(by=GFQ_ORDERED_X,ascending=True).reset_index(drop=True)
+                            dataset_A_GQ=sorted_dataset[lower_limit_A_GQ-1:upper_limit_A_GQ]
+                            dataset_B_GQ=sorted_dataset[lower_limit_B_GQ-1:upper_limit_B_GQ]
+                            regression_A=sm.OLS(dataset_A_GQ[Chosen_Y],dataset_A_GQ[regressor_list].assign(intercept=1)).fit()
+                            regression_B=sm.OLS(dataset_B_GQ[Chosen_Y],dataset_B_GQ[regressor_list].assign(intercept=1)).fit()
+                            list_sse_A_and_B=[regression_A.ssr,regression_B.ssr]
+                            df_residual_A_GQ=regression_A.df_resid
+                            df_residual_B_GQ=regression_B.df_resid
+                            F_statistic_Goldfeld_Quandt_2=max(list_sse_A_and_B)/min(list_sse_A_and_B) 
+                            if regression_A.ssr>regression_B.ssr:
+                                F_statistic_Goldfeld_Quandt_p_value_2=2*scipy.stats.f.sf(F_statistic_Goldfeld_Quandt_2, df_residual_A_GQ, df_residual_B_GQ)
+                            else:
+                                F_statistic_Goldfeld_Quandt_p_value_2=2*scipy.stats.f.sf(F_statistic_Goldfeld_Quandt_2, df_residual_B_GQ, df_residual_A_GQ)
+                            list_of_F_statistic_goldfeld_quandt_p_value.append(F_statistic_Goldfeld_Quandt_p_value_2)
+                        min_p_value_gfq=min(list_of_F_statistic_goldfeld_quandt_p_value)
+
+                        list_of_Heteroskedasticity_results=[min_p_value_gfq,hetero_breuch_pagan_chi_sq_p_value,hetero_breuch_pagan_f_test_p_value,HARVEY_Ch_sq_stat_p_value,HARVEY_F_STATISTICS_p_VALUE,GLEJSER_Ch_sq_stat_p_value,GLEJSER_F_STATISTICS_p_VALUE]
+                        Maximum_p_in_Heteroskedasticity=max(list_of_Heteroskedasticity_results)
+                        RESULTS_DF['5_Breusch–Pagan_chi_sq'][combination_number]=hetero_breuch_pagan_chi_sq_p_value
+                        RESULTS_DF['5_Breusch–Pagan_f'][combination_number]=hetero_breuch_pagan_f_test_p_value
+                        RESULTS_DF['5_Harvey_chi_sq'][combination_number]=HARVEY_Ch_sq_stat_p_value
+                        RESULTS_DF['5_Harvey_f'][combination_number]=HARVEY_F_STATISTICS_p_VALUE
+                        RESULTS_DF['5_Glejser_chi_sq'][combination_number]=GLEJSER_Ch_sq_stat_p_value
+                        RESULTS_DF['5_Glejser_f'][combination_number]=GLEJSER_F_STATISTICS_p_VALUE
+                        RESULTS_DF['5_MINIMUM_P_VALUE'][combination_number]=min(list_of_Heteroskedasticity_results)
+                        RESULTS_DF['5_Goldfeld-Quandt'][combination_number]=min_p_value_gfq
+
+                        if Maximum_p_in_Heteroskedasticity<min_p_for_Heteroskedasticity:
+                            #IF THE STATISTICAL THRESHOLDS ARE NOT MET, THE ALGORITHM REMOVES THIS REGRESSION SUMMARY AND GOES FOR THE NEXT ONE
+
+                            RESULTS_DF=RESULTS_DF.drop(combination_number)
+                        else:
+                            #COUNT THE SIGNS OF EACH REGRESSION COEFFICIENTS THAT IS ACCORDING TO EXPECTATIONS
+                            counting_wrong_signs=0
+                            for i in regressor_list:
+                                reg_coef=RESULTS_DF[i][combination_number]
+                                expected_sign=signs_table['effect'][i]
+                                #IF THE SIGN IS ACCORDING TO THE EXPECTATION
+                                if expected_sign==reg_coef/abs(reg_coef):
+                                    counting_wrong_signs += 0
+
+                                else:
+                                    #IF THERE IS GIVEN NO EXPECTATION TO THIS SIGN, THEN OK,THIS WILL NOT BE COUNTED AS AN UNEXPECTED SIGN
+                                    if expected_sign==0:
+                                       counting_wrong_signs += 0 
+                                        
+                                    else:
+                                        #IF THE SIGN IS ACCORDING TO THE EXPECTATION
+                                        counting_wrong_signs += 1
+                            RESULTS_DF['6_sign_test'][combination_number]=counting_wrong_signs
+                            #CALCULATE PREDICTIONS
+                            Predicted_values[combination_number]=list(regression.predict())
+                            XX_FOR_PREDICTIONS=Data_for_predictions[regressor_list]
+                            XX_FOR_PREDICTIONS['Const']=1         
+                            Predicted_values_2[combination_number]=list(regression.predict(XX_FOR_PREDICTIONS))
+                            
+#PREPARE OUTPUTS
+writer = pd.ExcelWriter(output_table_path, engine = 'xlsxwriter')
+
+#CALCULATE SUMMARY ONE
+#IN THIS SUMMARY ARE PRESENTED THE REGRESSIONS WICH THE ERROR NORMALITY AND HETEROSCEDASTICITY TEST HAVE MET THE STATISTICAL REQUIREMENTS AND ALSO HAVE EXPECTED SIGNS
+RESULTS_DF_BEST_REGRESSIONS=RESULTS_DF
+RESULTS_DF_BEST_REGRESSIONS=RESULTS_DF_BEST_REGRESSIONS[RESULTS_DF_BEST_REGRESSIONS['4_MINIMUM_P_VALUE'] > min_p_for_error_normality]
+RESULTS_DF_BEST_REGRESSIONS=RESULTS_DF_BEST_REGRESSIONS[RESULTS_DF_BEST_REGRESSIONS['5_MINIMUM_P_VALUE'] > min_p_for_Heteroskedasticity]
+RESULTS_DF_BEST_REGRESSIONS=RESULTS_DF_BEST_REGRESSIONS[RESULTS_DF_BEST_REGRESSIONS['6_sign_test'] == 0]
+
+RESULTS_DF_BEST_REGRESSIONS.to_excel(writer, sheet_name = 'Summary_1')
+#EXPORT SUMMARY TWO
+#IN THIS SUMMARY, ARE PRESENTED ALL REGRESSIONS THAT HAVE PASSED IN AT LEAST ONE ERROR NORMALITY AND HETEROSCEDASTICITY TESTS
+
+RESULTS_DF.to_excel(writer, sheet_name = 'Summary_2')
+#EXPORT THE PREDICTED VALUES
+Predicted_values.T.to_excel(writer, sheet_name = 'Predicted_values')
+Predicted_values_2.T.to_excel(writer, sheet_name = 'Specific_predictions')
+DATASET.to_excel(writer, sheet_name = 'Dataset')
+
+writer.save()
+writer.close()
+os.startfile(output_table_path)
+end_time=datetime.now()-start_time
+
+
+print("="*10)
+print("="*10)
+print("number of regressions/combinations: "+str(total_number_of_combinations))
+print("time: " +str(end_time))
+print("="*10)
+print("="*10)
